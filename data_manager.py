@@ -1,4 +1,3 @@
-from config import API_KEY, API_SECRET
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -6,74 +5,95 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetAssetsRequest
 from alpaca.trading.enums import AssetClass
 from datetime import datetime, timedelta
+import os
+
+# Load keys from environment
+API_KEY = os.getenv("ALPACA_API_KEY")
+API_SECRET = os.getenv("ALPACA_API_SECRET")
 
 client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
-def get_symbols() -> list:
-    """Returns a list of all pyttradable symbols"""
+
+def get_symbols(limit=100) -> list:
+    """Returns a list of tradable US equity symbols (limit can be changed)"""
     trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
     request_params = GetAssetsRequest(asset_class=AssetClass.US_EQUITY)
     assets = trading_client.get_all_assets(request_params)
     
     symbols = [asset.symbol for asset in assets if asset.tradable]
-    print(f"Found {len(symbols)} tradable symbols.")
-    return symbols
+    print(f"Found {len(symbols)} tradable symbols. Using top {limit}.")
+    return symbols[:limit]
+
 
 def get_price_change(symbol: str, days: int = 7) -> float:
-    """Returns percent change between average price over last `days` and the average of the previous `days`"""
-    end_date = datetime.now() - timedelta(days=1)
-    mid_date = end_date - timedelta(days=days)
-    start_date = mid_date - timedelta(days=days)
+    """
+    Returns percent change in average price between two `days`-long periods.
+    First period: days X to days Y (older)
+    Second period: most recent `days`
+    """
+    today = datetime.now()
+    buffer_days = days * 2 + 10  # holiday & weekend buffer
+    start_date = today - timedelta(days=buffer_days)
 
     request_params = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=TimeFrame.Day,
         start=start_date,
-        end=end_date
+        end=today,
+        feed='iex'  # ✅ use IEX feed
     )
 
-    bars = client.get_stock_bars(request_params).data.get(symbol, [])
-    if len(bars) < days * 2:  # We need enough bars for two full periods
-        print(f"Not enough data for {symbol}")
+    try:
+        bars = client.get_stock_bars(request_params).data.get(symbol, [])
+    except Exception as e:
+        print(f"Error fetching bars for {symbol}: {e}")
         return None
 
-    # Split into two periods
-    first_period = [bar.close for bar in bars if bar.t < mid_date]
-    second_period = [bar.close for bar in bars if bar.t >= mid_date]
-
-    if not first_period or not second_period:
-        print(f"Incomplete data for {symbol}")
+    if len(bars) < days + 5:  # be lenient
+        print(f"{symbol}: only {len(bars)} bars found (need {days + 5})")
         return None
 
-    avg_first = sum(first_period) / len(first_period)
-    avg_second = sum(second_period) / len(second_period)
+    # Sort bars by time to ensure order
+    bars.sort(key=lambda bar: bar.timestamp)
 
-    percent_change = (avg_second - avg_first) / avg_first
-    return percent_change
+    # Split data
+    midpoint = len(bars) // 2
+    first_half = bars[:midpoint]
+    second_half = bars[midpoint:]
+
+    first_avg = sum(bar.close for bar in first_half) / len(first_half)
+    second_avg = sum(bar.close for bar in second_half) / len(second_half)
+
+    return (second_avg - first_avg) / first_avg
 
 
-def get_top_movers(days: int = 30, top_n: int = 30, direction='losers') -> list[tuple[str, float]]:
-    """Fetches tradable symbols and returns top `n` movers over given time period"""
-    symbols = get_symbols()[:1000]  # Limit to first 200 symbols for performance
+def get_top_movers(days: int = 30, top_n: int = 30, direction: str = 'losers') -> list:
+    """
+    Fetches tradable symbols and returns top `n` movers.
+    direction: 'gainers' or 'losers'
+    """
+    symbols = get_symbols(limit=100)  # test on 100 for speed
     changes = []
-    
+
     for symbol in symbols:
         try:
             change = get_price_change(symbol, days)
             if change is not None:
                 changes.append((symbol, change))
         except Exception as e:
-            print(f"Error fetching data for {symbol}: {e}")
+            print(f"Error for {symbol}: {e}")
 
-    # Sort by change ascending for losers, descending for gainers
+    # Sort results
     sorted_changes = sorted(
-        changes, key=lambda x: x[1], reverse=(direction == 'gainers')
+        changes,
+        key=lambda x: x[1],
+        reverse=(direction == 'gainers')
     )
 
     top_movers = sorted_changes[:top_n]
 
-    # Print nicely formatted output
-    print(f"\nTop {top_n} {'gainers' if direction == 'gainers' else 'losers'} over the past {days} days:\n")
+    # Output
+    print(f"\nTop {top_n} {direction} over the past {days} days:\n")
     print(f"{'Symbol':<10} {'Change (%)':>12}")
     print("-" * 24)
     for symbol, change in top_movers:
@@ -82,5 +102,6 @@ def get_top_movers(days: int = 30, top_n: int = 30, direction='losers') -> list[
     return top_movers
 
 
-get_top_movers(days=30, top_n=30, direction='losers')
 
+# Run for 30-day losers
+get_top_movers(days=30, top_n=30, direction='losers')
