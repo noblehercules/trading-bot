@@ -2,7 +2,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from config import API_KEY, API_SECRET
-from data_manager import get_top_movers,change 
+from data_manager import get_top_movers 
 
 # Initialize trading client
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
@@ -44,3 +44,5 @@ def execute_strategy():
 
     place_orders(top_40_pct, cash_top)
     place_orders(bottom_60_pct, cash_bottom)
+
+execute_strategy() 
